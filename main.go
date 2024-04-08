@@ -13,7 +13,6 @@ import (
 	crdbpgx "github.com/cockroachdb/cockroach-go/v2/crdb/crdbpgxv5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.coldcutz.net/go-stuff/utils"
 	"golang.org/x/sync/errgroup"
 
@@ -45,26 +44,19 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return fmt.Errorf("strconv.Atoi(NUM_WORKERS): %w", err)
 	}
 
-	config, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	config, err := pgx.ParseConfig(os.Getenv("DATABASE_URL"))
 	if err != nil {
 		return fmt.Errorf("pgx.ParseConfig: %w", err)
 	}
-	config.ConnConfig.RuntimeParams["application_name"] = "cc/crdbtestjobs"
-	config.MaxConns = int32(numWorkers) + 1
+	config.RuntimeParams["application_name"] = "cc/crdbtestjobs"
 
-	pool, err := pgxpool.NewWithConfig(ctx, config)
+	mConn, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
 		return fmt.Errorf("pgx.ConnectConfig: %w", err)
 	}
-	defer pool.Close()
+	defer mConn.Close(ctx)
 
 	log.Debug("running schema.sql")
-	mConn, err := pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("acquiring connection to run schema.sql: %w", err)
-	}
-	defer mConn.Release()
-
 	err = crdbpgx.ExecuteTx(ctx, mConn, pgx.TxOptions{AccessMode: pgx.ReadWrite}, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, schemaSql)
 		return err
@@ -96,11 +88,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		eg.Go(func() error {
 			log := log.With("worker", wi)
 			defer log.Info("worker done", "wi", wi)
-			conn, err := pool.Acquire(ctx)
+			conn, err := pgx.ConnectConfig(ctx, config)
 			if err != nil {
-				return fmt.Errorf("acquiring connection: %w", err)
+				return fmt.Errorf("pgx.ConnectConfig: %w", err)
 			}
-			defer conn.Release()
+			defer conn.Close(ctx)
 
 			for ctx.Err() == nil {
 				err := crdbpgx.ExecuteTx(ctx, conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
@@ -117,7 +109,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 					// do the job
 					select {
-					case <-time.After(1 * time.Second):
+					case <-time.After(5 * time.Second):
 					case <-ctx.Done():
 						return ctx.Err()
 					}
