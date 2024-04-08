@@ -13,6 +13,7 @@ import (
 	crdbpgx "github.com/cockroachdb/cockroach-go/v2/crdb/crdbpgxv5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.coldcutz.net/go-stuff/utils"
 	"golang.org/x/sync/errgroup"
 
@@ -39,23 +40,32 @@ func main() {
 }
 
 func run(ctx context.Context, log *slog.Logger) error {
-	config, err := pgx.ParseConfig(os.Getenv("DATABASE_URL"))
+	numWorkers, err := strconv.Atoi(os.Getenv("NUM_WORKERS"))
+	if err != nil {
+		return fmt.Errorf("strconv.Atoi(NUM_WORKERS): %w", err)
+	}
+
+	config, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
 	if err != nil {
 		return fmt.Errorf("pgx.ParseConfig: %w", err)
 	}
-	config.RuntimeParams["application_name"] = "cc/crdbtestjobs"
-	conn, err := pgx.ConnectConfig(ctx, config)
+	config.ConnConfig.RuntimeParams["application_name"] = "cc/crdbtestjobs"
+	config.MaxConns = int32(numWorkers) + 1
+
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return fmt.Errorf("pgx.ConnectConfig: %w", err)
 	}
-	defer conn.Close(ctx)
+	defer pool.Close()
 
-	log.Info("connected")
-
-	// run schema.sql
 	log.Debug("running schema.sql")
+	schemaConn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring connection to run schema.sql: %w", err)
+	}
+	defer schemaConn.Release()
 
-	err = crdbpgx.ExecuteTx(ctx, conn, pgx.TxOptions{AccessMode: pgx.ReadWrite}, func(tx pgx.Tx) error {
+	err = crdbpgx.ExecuteTx(ctx, schemaConn, pgx.TxOptions{AccessMode: pgx.ReadWrite}, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, schemaSql)
 		return err
 	})
@@ -63,16 +73,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return fmt.Errorf("crdbpgx.ExecuteTx (schema.sql): %w", err)
 	}
 
-	queries := models.New()
+	log.Debug("schema.sql ran")
 
-	numWorkers, err := strconv.Atoi(os.Getenv("NUM_WORKERS"))
-	if err != nil {
-		return fmt.Errorf("strconv.Atoi(NUM_WORKERS): %w", err)
-	}
+	queries := models.New()
 
 	eg, ctx := errgroup.WithContext(ctx)
 	for wi := 0; wi < numWorkers; wi++ {
 		eg.Go(func() error {
+			defer log.Info("worker done", "wi", wi)
+			conn, err := pool.Acquire(ctx)
+			if err != nil {
+				return fmt.Errorf("acquiring connection: %w", err)
+			}
+			defer conn.Release()
+
 			for ctx.Err() == nil {
 				err := crdbpgx.ExecuteTx(ctx, conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
 					job, err := queries.GetJob(ctx, tx)
