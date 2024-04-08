@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
 	crdbpgx "github.com/cockroachdb/cockroach-go/v2/crdb/crdbpgxv5"
@@ -64,8 +65,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	queries := models.New()
 
+	numWorkers, err := strconv.Atoi(os.Getenv("NUM_WORKERS"))
+	if err != nil {
+		return fmt.Errorf("strconv.Atoi(NUM_WORKERS): %w", err)
+	}
+
 	eg, ctx := errgroup.WithContext(ctx)
-	for wi := 0; wi < 3; wi++ {
+	for wi := 0; wi < numWorkers; wi++ {
 		eg.Go(func() error {
 			for ctx.Err() == nil {
 				err := crdbpgx.ExecuteTx(ctx, conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
@@ -81,7 +87,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 					log.Info("job found", "job", job.Name)
 
 					// do the job
-					time.Sleep(10 * time.Second)
+					select {
+					case <-time.After(1 * time.Second):
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 
 					job, err = queries.FinishJob(ctx, tx, models.FinishJobParams{
 						ID:          job.ID,
