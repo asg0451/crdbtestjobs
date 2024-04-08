@@ -59,13 +59,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	defer pool.Close()
 
 	log.Debug("running schema.sql")
-	schemaConn, err := pool.Acquire(ctx)
+	mConn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring connection to run schema.sql: %w", err)
 	}
-	defer schemaConn.Release()
+	defer mConn.Release()
 
-	err = crdbpgx.ExecuteTx(ctx, schemaConn, pgx.TxOptions{AccessMode: pgx.ReadWrite}, func(tx pgx.Tx) error {
+	err = crdbpgx.ExecuteTx(ctx, mConn, pgx.TxOptions{AccessMode: pgx.ReadWrite}, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, schemaSql)
 		return err
 	})
@@ -73,13 +73,28 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return fmt.Errorf("crdbpgx.ExecuteTx (schema.sql): %w", err)
 	}
 
-	log.Debug("schema.sql ran")
-
 	queries := models.New()
+
+	log.Debug("resetting jobs")
+	err = crdbpgx.ExecuteTx(ctx, mConn, pgx.TxOptions{AccessMode: pgx.ReadWrite}, func(tx pgx.Tx) error {
+		if err := queries.WipeJobs(ctx, tx); err != nil {
+			return fmt.Errorf("queries.WipeJobs: %w", err)
+		}
+
+		if err := queries.SeedJobs(ctx, tx); err != nil {
+			return fmt.Errorf("queries.SeedJobs: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("crdbpgx.ExecuteTx (reset jobs): %w", err)
+	}
 
 	eg, ctx := errgroup.WithContext(ctx)
 	for wi := 0; wi < numWorkers; wi++ {
 		eg.Go(func() error {
+			log := log.With("worker", wi)
 			defer log.Info("worker done", "wi", wi)
 			conn, err := pool.Acquire(ctx)
 			if err != nil {

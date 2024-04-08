@@ -49,3 +49,21 @@ func (q *Queries) GetJob(ctx context.Context, db DBTX) (Job, error) {
 	)
 	return i, err
 }
+
+const seedJobs = `-- name: SeedJobs :exec
+insert into jobs (name) values ('a'), ('b'), ('c'), ('d'), ('e'), ('f')
+`
+
+func (q *Queries) SeedJobs(ctx context.Context, db DBTX) error {
+	_, err := db.Exec(ctx, seedJobs)
+	return err
+}
+
+const wipeJobs = `-- name: WipeJobs :exec
+delete from jobs
+`
+
+func (q *Queries) WipeJobs(ctx context.Context, db DBTX) error {
+	_, err := db.Exec(ctx, wipeJobs)
+	return err
+}
