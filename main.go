@@ -34,7 +34,7 @@ func main() {
 	defer done()
 
 	if err := run(ctx, log); err != nil {
-		panic(err)
+		log.Error("run error", "err", err.Error())
 	}
 }
 
