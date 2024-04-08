@@ -94,6 +94,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 			}
 			defer conn.Close(ctx)
 
+			// set session vars
+			// ERROR: usage of replicated locks in conjunction with skip locked wait policy is currently unsupported (SQLSTATE 0A000)"
+			// if _, err := conn.Exec(ctx, "SET enable_durable_locking_for_serializable = true"); err != nil {
+			// 	return fmt.Errorf("setting enable_durable_locking_for_serializable: %w", err)
+			// }
+			if _, err := conn.Exec(ctx, "SET transaction_timeout = '30s'"); err != nil {
+				return fmt.Errorf("setting lock_timeout: %w", err)
+			}
+
 			for ctx.Err() == nil {
 				err := crdbpgx.ExecuteTx(ctx, conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
 					job, err := queries.GetJob(ctx, tx)
