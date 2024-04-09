@@ -99,6 +99,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 			// if _, err := conn.Exec(ctx, "SET enable_durable_locking_for_serializable = true"); err != nil {
 			// 	return fmt.Errorf("setting enable_durable_locking_for_serializable: %w", err)
 			// }
+			// if _, err := conn.Exec(ctx, "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE"); err != nil {
+			// 	return fmt.Errorf("setting isolation level: %w", err)
+			// }
 			if _, err := conn.Exec(ctx, "SET transaction_timeout = '30s'"); err != nil {
 				return fmt.Errorf("setting lock_timeout: %w", err)
 			}
