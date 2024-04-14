@@ -65,6 +65,8 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return fmt.Errorf("crdbpgx.ExecuteTx (schema.sql): %w", err)
 	}
 
+	done := make(chan struct{})
+
 	queries := models.New()
 
 	log.Debug("resetting jobs")
@@ -73,7 +75,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return fmt.Errorf("queries.WipeJobs: %w", err)
 		}
 
-		if err := queries.SeedJobs(ctx, tx); err != nil {
+		numJobs := &pgtype.Numeric{}
+		if err := numJobs.ScanInt64(pgtype.Int8{Int64: 100, Valid: true}); err != nil {
+			return fmt.Errorf("numJobs.ScanInt64: %w", err)
+		}
+		if err := queries.SeedJobs(ctx, tx, *numJobs); err != nil {
 			return fmt.Errorf("queries.SeedJobs: %w", err)
 		}
 
@@ -84,6 +90,52 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	eg, ctx := errgroup.WithContext(ctx)
+
+	// monitor loop
+	eg.Go(func() error {
+		conn, err := pgx.ConnectConfig(ctx, config)
+		if err != nil {
+			return fmt.Errorf("pgx.ConnectConfig: %w", err)
+		}
+		defer conn.Close(ctx)
+
+		if _, err := conn.Exec(ctx, "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED"); err != nil {
+			return fmt.Errorf("setting isolation level: %w", err)
+		}
+
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for ctx.Err() == nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
+
+			noneLeft := false
+			err := crdbpgx.ExecuteTx(ctx, conn, pgx.TxOptions{}, func(pgx.Tx) error {
+				js, err := queries.ListPendingJobs(ctx, conn)
+				if err != nil {
+					return fmt.Errorf("queries.ListPendingJobs: %w", err)
+				}
+				log.Info("num pending jobs", "num", len(js))
+				if len(js) == 0 {
+					log.Info("no pending jobs")
+					noneLeft = true
+				}
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("crdbpgx.ExecuteTx: %w", err)
+			}
+			if noneLeft {
+				close(done)
+				return nil
+			}
+		}
+		return nil
+	})
+
 	for wi := 0; wi < numWorkers; wi++ {
 		eg.Go(func() error {
 			log := log.With("worker", wi)
@@ -107,11 +159,27 @@ func run(ctx context.Context, log *slog.Logger) error {
 			}
 
 			for ctx.Err() == nil {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-done:
+					return nil
+				default:
+				}
+
 				err := crdbpgx.ExecuteTx(ctx, conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
 					job, err := queries.GetJob(ctx, tx)
 					if err != nil {
 						if errors.Is(err, pgx.ErrNoRows) {
 							log.Info("no job found")
+
+							// wait a bit
+							select {
+							case <-time.After(1 * time.Second):
+							case <-ctx.Done():
+								return ctx.Err()
+							}
+
 							return nil
 						}
 						return fmt.Errorf("queries.GetJob: %w", err)

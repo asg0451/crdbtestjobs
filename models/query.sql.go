@@ -50,12 +50,42 @@ func (q *Queries) GetJob(ctx context.Context, db DBTX) (Job, error) {
 	return i, err
 }
 
-const seedJobs = `-- name: SeedJobs :exec
-insert into jobs (name) values ('a'), ('b'), ('c'), ('d'), ('e'), ('f')
+const listPendingJobs = `-- name: ListPendingJobs :many
+SELECT id, name, created_at, completed_at, completed_by FROM jobs where completed_at IS NULL
 `
 
-func (q *Queries) SeedJobs(ctx context.Context, db DBTX) error {
-	_, err := db.Exec(ctx, seedJobs)
+func (q *Queries) ListPendingJobs(ctx context.Context, db DBTX) ([]Job, error) {
+	rows, err := db.Query(ctx, listPendingJobs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.CompletedAt,
+			&i.CompletedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const seedJobs = `-- name: SeedJobs :exec
+insert into jobs (name) SELECT CONCAT('job-', i::text) from generate_series(0, $1) as t(i)
+`
+
+func (q *Queries) SeedJobs(ctx context.Context, db DBTX, generateSeries pgtype.Numeric) error {
+	_, err := db.Exec(ctx, seedJobs, generateSeries)
 	return err
 }
 
