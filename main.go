@@ -104,6 +104,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 				return fmt.Errorf("setting isolation level: %w", err)
 			}
 		}
+		if os.Getenv("SET_STUFF") != "" {
+			if _, err := conn.Exec(ctx, "SET optimizer_use_lock_op_for_serializable = on"); err != nil {
+				return fmt.Errorf("setting optimizer_use_lock_op_for_serializable: %w", err)
+			}
+			if _, err := conn.Exec(ctx, "SET enable_durable_locking_for_serializable = true"); err != nil {
+				return fmt.Errorf("setting enable_durable_locking_for_serializable: %w", err)
+			}
+		}
 
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
@@ -149,15 +157,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 			defer conn.Close(ctx)
 
 			// set session vars
-			// ERROR: usage of replicated locks in conjunction with skip locked wait policy is currently unsupported (SQLSTATE 0A000)"
-			// if _, err := conn.Exec(ctx, "SET enable_durable_locking_for_serializable = true"); err != nil {
-			// 	return fmt.Errorf("setting enable_durable_locking_for_serializable: %w", err)
-			// }
 			if iso := os.Getenv("ISOLATION_LEVEL"); iso != "" {
 				if _, err := conn.Exec(ctx, fmt.Sprintf("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL %s", iso)); err != nil {
 					return fmt.Errorf("setting isolation level: %w", err)
 				}
 			}
+			if os.Getenv("SET_STUFF") != "" {
+				if _, err := conn.Exec(ctx, "SET optimizer_use_lock_op_for_serializable = on"); err != nil {
+					return fmt.Errorf("setting optimizer_use_lock_op_for_serializable: %w", err)
+				}
+				if _, err := conn.Exec(ctx, "SET enable_durable_locking_for_serializable = true"); err != nil {
+					return fmt.Errorf("setting enable_durable_locking_for_serializable: %w", err)
+				}
+			}
+
 			if _, err := conn.Exec(ctx, "SET transaction_timeout = '30s'"); err != nil {
 				return fmt.Errorf("setting lock_timeout: %w", err)
 			}
