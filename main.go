@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"os"
 	"strconv"
 	"time"
@@ -206,7 +207,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 					// do the job
 					select {
-					case <-time.After(5 * time.Second):
+					case <-time.After(5*time.Second + time.Duration(rand.Intn(100))*time.Millisecond):
 					case <-ctx.Done():
 						return ctx.Err()
 					}
