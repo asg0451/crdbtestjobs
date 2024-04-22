@@ -124,8 +124,8 @@ func run(ctx context.Context, log *slog.Logger) error {
 			}
 
 			noneLeft := false
-			err := crdbpgx.ExecuteTx(ctx, conn, pgx.TxOptions{}, func(pgx.Tx) error {
-				js, err := queries.ListPendingJobs(ctx, conn)
+			err := crdbpgx.ExecuteTx(ctx, conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
+				js, err := queries.ListPendingJobs(ctx, tx)
 				if err != nil {
 					return fmt.Errorf("queries.ListPendingJobs: %w", err)
 				}
